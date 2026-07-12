@@ -89,8 +89,11 @@ export function useMidnight(): MidnightState & MidnightActions {
     setError(null)
 
     try {
-      // Check Lace is installed — it injects window.midnight.lace
-      const lace = (window as any)?.midnight?.lace as DAppConnectorAPI | undefined
+      // Check Lace is installed.
+      // The official Midnight Lace edition injects under window.midnight.mnLace
+      // Some builds may also use window.midnight.lace — we check both.
+      const mnLace = (window as any)?.midnight?.mnLace as DAppConnectorAPI | undefined
+      const lace = mnLace ?? ((window as any)?.midnight?.lace as DAppConnectorAPI | undefined)
       if (!lace) {
         throw new Error(
           'Lace wallet not found. Install the Lace browser extension and enable the Midnight DApp connector.',

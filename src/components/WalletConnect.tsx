@@ -41,6 +41,11 @@ export function WalletConnect({
   const isConnecting = status === 'connecting'
   const isError = status === 'error'
 
+  // Debug: log what Midnight keys are available on window
+  const debugKeys = typeof window !== 'undefined'
+    ? Object.keys((window as any)?.midnight ?? {}).join(', ') || 'none'
+    : 'n/a'
+
   return (
     <div style={styles.container}>
       {/* Header */}
@@ -124,6 +129,13 @@ export function WalletConnect({
             Lace wallet
           </a>{' '}
           with Midnight DApp connector enabled
+        </p>
+      )}
+
+      {/* Debug info — shows what's available on window.midnight */}
+      {!isConnected && (
+        <p style={styles.debugHint} aria-label="Debug: detected wallet keys">
+          window.midnight keys: <code>{debugKeys}</code>
         </p>
       )}
     </div>
@@ -270,5 +282,14 @@ const styles = {
     color: '#4a5568',
     textAlign: 'center' as const,
     lineHeight: 1.4,
+  },
+  debugHint: {
+    fontSize: '11px',
+    color: '#4a5568',
+    textAlign: 'center' as const,
+    fontFamily: "'JetBrains Mono', monospace",
+    background: '#0d0f14',
+    borderRadius: '4px',
+    padding: '4px 8px',
   },
 }
