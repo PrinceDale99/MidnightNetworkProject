@@ -4,7 +4,7 @@
 
 ## Live Demo
 
-[PLACEHOLDER — paste Vercel/Netlify URL after deploying frontend]
+[https://zk-whistleblower-one.vercel.app](https://zk-whistleblower-one.vercel.app)
 
 ## Contract Address
 
