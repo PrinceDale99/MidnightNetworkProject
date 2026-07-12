@@ -114,17 +114,21 @@ Fund your wallet at the [Preview Faucet](https://faucet.testnet-v2.midnight.netw
 
 ## Initial Idea
 
-[LEAVE PLACEHOLDER — fill this in manually before submitting]
+**ZK-Whistleblower** — A decentralized anti-corruption and corporate auditing platform that enables employees to securely report internal fraud or environmental (ESG) violations and claim financial bounties completely anonymously.
+
+By utilizing Midnight's Zero-Knowledge capabilities, a worker can use a privately issued cryptographic credential to prove they are a verified employee of the organization — without revealing their name, department, or wallet address. The platform evaluates submitted evidence via encrypted state, and if the violation is verified, it automatically routes a financial bounty to the whistleblower's fresh wallet — ensuring corporations cannot trace the payout.
+
+This protects whistleblowers from retaliation while incentivizing systemic transparency at scale.
 
 ## Screenshots
 
 **Successful compile output (circuits listed)**
 
-![Compile output showing 3 circuits](public/circuitslist.png)
+![Compile output showing 3 circuits](public/CircuitsList.png)
 
 **Contract deployed with address**
 
-![Contract deployed successfully with address](public/compilesuccess.png)
+![Contract deployed successfully with address](public/CompileSuccess.png)
 
 ---
 
