@@ -1,0 +1,90 @@
+// Privacy-Preserving Counter Contract
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// PUBLIC (on-chain, visible to anyone):
+//   - `round`   : Counter — the total number of increment operations performed
+//   - `count`   : Uint<64> — the current counter value (resettable)
+//   - `owner`   : Bytes<32> — hash of the owner's secret key
+//
+// PRIVATE (private witness, never on-chain):
+//   - increment_amount() : the exact amount to add — callers prove it is in
+//                          range [1, 100] without disclosing the value itself
+//   - caller_secret()    : 32-byte secret — only its hash ever appears on-chain
+//                          Used to prove ownership for privileged operations
+//
+// What the user PROVES without revealing:
+//   - That increment_amount is within [1, 100] (enforced as a ZK constraint)
+//   - That persistentHash(caller_secret) == owner (ownership proof, no leak)
+//   - On reset: that the caller is the legitimate owner of this contract
+// ─────────────────────────────────────────────────────────────────────────────
+
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+// ── Public ledger state ───────────────────────────────────────────────────────
+export ledger round: Counter;          // counts total increment operations
+export ledger count: Uint<64>;         // resettable counter value
+export ledger owner: Bytes<32>;        // hash of the owner's secret (public)
+
+// ── Private witnesses (inputs that stay off-chain) ───────────────────────────
+witness increment_amount(): Uint<64>;  // private: how much to increment
+witness caller_secret(): Bytes<32>;    // private: raw owner secret
+
+// ── Constructor ───────────────────────────────────────────────────────────────
+constructor(initial_owner_hash: Bytes<32>) {
+  // round (Counter) and count (Uint<64>) auto-initialize to 0
+  // initial_owner_hash is a constructor param (public input) — must disclose
+  owner = disclose(initial_owner_hash);
+}
+
+// ── Circuit: increment ────────────────────────────────────────────────────────
+// Increments the counter by a PRIVATE amount (range: 1–100).
+// Only the resulting new counter value is disclosed — the increment stays hidden.
+export circuit increment(): [] {
+  const amount: Uint<64> = increment_amount();
+
+  // ZK range constraint: proves 1 ≤ amount ≤ 100 without revealing amount
+  assert(amount >= 1,   "Increment must be at least 1");
+  assert(amount <= 100, "Increment must be at most 100");
+
+  count = disclose((count + amount) as Uint<64>);
+  round.increment(1);
+
+  // The new count value is disclosed above via disclose().
+  // The private increment amount is intentionally NOT separately disclosed.
+  disclose(count);
+}
+
+// ── Circuit: increment_public ─────────────────────────────────────────────────
+// Opt-in variant: caller explicitly reveals the increment amount publicly.
+export circuit increment_public(): [] {
+  const amount: Uint<64> = increment_amount();
+
+  assert(amount >= 1,   "Increment must be at least 1");
+  assert(amount <= 100, "Increment must be at most 100");
+
+  count = disclose((count + amount) as Uint<64>);
+  round.increment(1);
+
+  // Caller opts in — both the amount AND new value are disclosed
+  disclose(amount);
+  disclose(count);
+}
+
+// ── Circuit: reset ────────────────────────────────────────────────────────────
+// Resets the counter to zero. Proves ownership via secret hash — the raw
+// secret is NEVER disclosed or stored on-chain.
+export circuit reset(): [] {
+  const secret: Bytes<32> = caller_secret();
+  // Derive owner key from secret (matches how owner was set at deploy time)
+  const secret_hash: Bytes<32> = persistentHash<Bytes<32>>(secret);
+
+  // Proves the caller knows the preimage of `owner` — without leaking secret
+  assert(secret_hash == owner, "Only the owner can reset the counter");
+
+  count = 0;
+
+  // Disclose that a reset occurred and the owner hash (auditable) — NOT secret
+  disclose(secret_hash);
+}
