@@ -4,12 +4,10 @@
 
 ## Contract Address
 
-| Network  | Address                          |
-|----------|----------------------------------|
-| Preview  | [PASTE ADDRESS AFTER DEPLOY]     |
-| Preprod  | [PASTE ADDRESS AFTER DEPLOY]     |
-
-*(This section is MANDATORY. Placeholders will be updated after deployment.)*
+| Network  | Address                                                          |
+|----------|------------------------------------------------------------------|
+| Preview  | 113506ad58111449d58e29b91a68b77683058b3e40b0c1d866631e4d7f683809 |
+| Preprod  | [PASTE ADDRESS AFTER DEPLOY]                                     |
 
 ## What This Does
 
