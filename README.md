@@ -118,7 +118,13 @@ Fund your wallet at the [Preview Faucet](https://faucet.testnet-v2.midnight.netw
 
 ## Screenshots
 
-[LEAVE PLACEHOLDER — add compile output screenshot and contract address screenshot before submitting]
+**Successful compile output (circuits listed)**
+
+![Compile output showing 3 circuits](public/circuitslist.png)
+
+**Contract deployed with address**
+
+![Contract deployed successfully with address](public/compilesuccess.png)
 
 ---
 
