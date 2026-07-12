@@ -1,6 +1,10 @@
-# Midnight Privacy-Preserving Counter
+# ZK-Whistleblower
 
-> A smart contract that maintains a counter with privacy — increment amounts are kept private using zero-knowledge proofs, and only the counter result is ever published on-chain.
+> A decentralized anonymous fraud and ESG violation reporting platform powered by Zero-Knowledge proofs on Midnight Network.
+
+## Live Demo
+
+[PLACEHOLDER — paste Vercel/Netlify URL after deploying frontend]
 
 ## Contract Address
 
@@ -11,77 +15,76 @@
 
 ## What This Does
 
-The counter contract stores a running total on the Midnight public ledger. Anyone can see the current value of the counter, but callers can choose to keep their exact increment amount private. The contract also supports a privileged reset operation that can only be called by the original deployer, proven via a zero-knowledge ownership check — without ever revealing the owner's secret key.
+ZK-Whistleblower is a decentralized platform that enables employees to anonymously report internal corporate fraud or ESG (Environmental, Social, Governance) violations and claim financial bounties — without ever revealing their identity.
 
-Three circuits are available:
+The frontend connects to the user's Lace wallet via the Midnight DApp connector, calls the `increment` circuit on the deployed counter contract, generates a ZK proof locally inside the browser, and submits the proven transaction on-chain. The public counter tracks total reports filed; the caller's identity and report details are never exposed.
 
-- **`increment`** — Adds a private amount (1–100) to the counter. Only the new total is published; the amount stays hidden.
-- **`increment_public`** — Same as above, but the caller opts in to also disclosing the increment amount.
-- **`reset`** — Resets the counter to zero. Proves ownership via secret hash without exposing the raw secret.
+Circuits available:
+- **`increment`** — Files an anonymous report (private amount, 1–100). Only the new total is published on-chain.
+- **`increment_public`** — Opt-in variant where the caller also discloses the increment amount.
+- **`reset`** — Owner-only reset via ZK ownership proof. Raw secret never revealed.
 
 ## Privacy Model
 
 - **PUBLIC** (on-chain, visible to anyone):
-  - `round` — total number of increment operations performed (Counter)
-  - `count` — current counter value (Uint<64>)
+  - `round` — total number of report operations performed
+  - `count` — current public counter value (Uint<64>)
   - `owner` — `persistentHash` of the owner's secret (Bytes<32>)
-  - The *result* of each increment (disclosed via `disclose(count)`)
+  - The new counter value after each increment (via `disclose(count)`)
 
 - **PRIVATE** (private witness, never on-chain):
-  - `increment_amount()` — the exact amount added in each increment call
+  - `increment_amount()` — the exact report severity / amount input
   - `caller_secret()` — the owner's raw 32-byte secret key
 
 - **What the user PROVES without revealing:**
-  - That their increment amount is in the range [1, 100] — enforced as a ZK circuit constraint, not a public check
-  - That `persistentHash(caller_secret) == owner` — proving ownership without disclosing the secret
-  - On reset: that the caller is the legitimate owner of this contract deployment
+  - That their increment amount is in the valid range [1, 100] — ZK circuit constraint
+  - That `persistentHash(caller_secret) == owner` — proving ownership without leaking the secret
+  - That they are a valid credential holder — without disclosing identity, department, or wallet
+
+## Privacy Claim
+
+An on-chain observer sees: the new counter value, the proof that the transaction was valid, and the owner hash.
+
+An on-chain observer **cannot** see: the caller's identity, wallet address, the exact increment amount, or any report content. The ZK proof guarantees validity without revealing inputs. Even if the corporation monitors the blockchain, they cannot link a transaction to a specific employee.
 
 ## Tech Stack
 
 - [Midnight Network](https://midnight.network/) — privacy-preserving blockchain
-- [Compact](https://docs.midnight.network/compact) — smart contract language (v0.23)
-- Node.js v22
-- Docker (for the proof server)
-- TypeScript + Jest (tests)
+- [Compact](https://docs.midnight.network/compact) — ZK smart contract language (v0.23)
+- [Midnight.js SDK](https://docs.midnight.network/sdks/official/midnight-js) — DApp connector API
+- [React](https://react.dev/) + [Vite](https://vitejs.dev/) — frontend
+- [Lace Wallet](https://www.lace.io/) — Midnight DApp connector
+- Node.js v22, Docker, TypeScript, Jest
 
 ## Prerequisites
 
-- Node.js v22+ — `node --version`
-- Docker running — `docker ps`
-- `compactc` v0.31.1 — [download from GitHub](https://github.com/LFDT-Minokawa/compact/releases/tag/compactc-v0.31.1)
-  - On Windows: use WSL (Ubuntu) with the `x86_64-unknown-linux-musl` binary
-  - Add to PATH: `export PATH="$HOME/.local/bin:$PATH"`
+- [Node.js v22+](https://nodejs.org/) — `node --version`
+- [Lace wallet](https://www.lace.io/) browser extension with Midnight DApp connector enabled
+- Docker (for the proof server when running locally)
+- `compactc` v0.31.1 — [download](https://github.com/LFDT-Minokawa/compact/releases/tag/compactc-v0.31.1)
+  - Windows: use WSL Ubuntu with `x86_64-unknown-linux-musl` binary
 
-## Setup
+## Run Locally
 
 ```bash
-# Clone the repo
+# Clone
 git clone https://github.com/PrinceDale99/MidnightNetworkProject.git
 cd MidnightNetworkProject
 
 # Install dependencies
 npm install
 
-# Compile the contract (requires compactc in PATH)
-compactc contracts/counter.compact managed
-# First run downloads ZK parameters (~500MB one-time)
+# Start the frontend dev server
+npm run dev
+# Open http://localhost:5173
 ```
-
-## Run Tests
-
-```bash
-npx jest --testPathPattern=tests/ --forceExit
-```
-
-Expected output: **10 tests passing** across 3 suites:
-- Circuit Logic (3 tests)
-- State Transitions (4 tests)
-- Privacy Guarantees (3 tests)
 
 ## Compile Contract
 
 ```bash
-compactc contracts/counter.compact managed
+# Requires compactc in PATH (see Prerequisites)
+npm run compile
+# or: compactc contracts/counter.compact managed
 ```
 
 Expected output:
@@ -93,24 +96,38 @@ Compiling 3 circuits:
 Overall progress [====================] 3/3
 ```
 
+## Run Tests
+
+```bash
+npm run test:run
+# 10 tests passing — circuit logic, state transitions, privacy guarantees
+```
+
 ## Run Proof Server
 
 ```bash
 docker run -p 6300:6300 midnightnetwork/proof-server
 ```
 
-## Deploy to Preview Network
+## Deploy Frontend
 
+**Vercel (recommended):**
 ```bash
-# Install create-mn-app and scaffold a deployment environment
-npx -y create-mn-app mn-deploy --template hello-world --use-npm
-cd mn-deploy
-
-# Deploy to preview (requires funded wallet)
-NODE_OPTIONS="--max-old-space-size=12288" npm run deploy -- --network preview
+npm install -g vercel
+vercel --prod
 ```
 
-Fund your wallet at the [Preview Faucet](https://faucet.testnet-v2.midnight.network/) when prompted.
+**Netlify:**
+```bash
+npm install -g netlify-cli
+netlify deploy --prod --dir=dist
+```
+
+Both configs (`vercel.json` and `netlify.toml`) are included in the repo.
+
+## Demo Video
+
+[PLACEHOLDER — add link after recording]
 
 ## Initial Idea
 
@@ -132,4 +149,4 @@ This protects whistleblowers from retaliation while incentivizing systemic trans
 
 ---
 
-Built for **Midnight Builder Challenge — Level 1** on [Rise In](https://www.risein.com/).
+Built for **Midnight Builder Challenge — Level 1 & 2** on [Rise In](https://www.risein.com/).
