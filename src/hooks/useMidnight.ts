@@ -94,7 +94,7 @@ export function getDetectedWallets(): string {
     .join(', ')
 }
 
-const NETWORK_ID = 'preprod' // target network (lowercase for CAIP-372)
+const NETWORK_IDS_TO_TRY = ['preview', 'preprod', 'Preview', 'PreProd', 'testnet', 'TestNet', 'undeployed']
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
@@ -134,17 +134,35 @@ export function useMidnight(): MidnightState & MidnightActions {
     setWalletName(name)
 
     // v4 API: connect(networkId) — call synchronously, no await before this
-    const connectPromise: Promise<ConnectedAPI> =
-      typeof wallet.connect === 'function'
-        ? wallet.connect(NETWORK_ID)
-        : wallet.enable!()
+    // Try multiple network ID strings since Lace is strict about exact match
+    const tryConnect = async (): Promise<ConnectedAPI> => {
+      for (const netId of NETWORK_IDS_TO_TRY) {
+        try {
+          if (typeof wallet.connect === 'function') {
+            return await wallet.connect(netId)
+          }
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          // Stop trying on user rejection
+          if (msg.toLowerCase().includes('user reject') || msg.includes('4001')) throw e
+          // Keep trying other network IDs on mismatch
+          if (msg.toLowerCase().includes('mismatch') || msg.toLowerCase().includes('network')) continue
+          throw e
+        }
+      }
+      // Fallback to legacy enable()
+      if (typeof wallet.enable === 'function') return wallet.enable!()
+      throw new Error('Could not connect to wallet on any network ID')
+    }
+
+    const connectPromise: Promise<ConnectedAPI> = tryConnect()
 
     connectPromise
       .then(async (api: ConnectedAPI) => {
         connectedApiRef.current = api
 
         // Get network
-        let detectedNetwork = NETWORK_ID
+        let detectedNetwork = 'preview'
         if (typeof api.getConnectionStatus === 'function') {
           try {
             const status = await api.getConnectionStatus()
