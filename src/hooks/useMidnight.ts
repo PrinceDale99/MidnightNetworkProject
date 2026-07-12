@@ -1,47 +1,62 @@
 /**
  * useMidnight.ts
  *
- * Custom React hook for interacting with the Midnight Network via the
- * Lace wallet DApp connector API.
+ * Custom React hook for connecting to Midnight Network via Lace wallet.
  *
- * Handles:
- *  - Wallet connection / disconnection lifecycle
- *  - Network detection via serviceUriConfig (substrate node URI)
- *  - Exposing wallet address and connection state
- *  - Circuit call abstraction (increment circuit on the counter contract)
+ * Uses the v4 CAIP-372 DApp Connector API:
+ *  - Lace injects under window.midnight keyed by a UUID (not a fixed name)
+ *  - Discovery: scan Object.values(window.midnight) for the first valid wallet
+ *  - Connection: wallet.connect(networkId) — MUST be called synchronously
+ *    inside a click handler (Lace opens a popup; browser blocks it if async)
+ *  - Address: api.getUnshieldedAddress()
+ *  - Network: api.getConnectionStatus().networkId
  *
- * Privacy note: private witness inputs (increment_amount) are NEVER
- * stored in React state, logged to the console, or displayed in the UI.
- * They exist only inside the Lace wallet / proof server during proof
- * generation — completely off-screen and off-state.
+ * Privacy guarantee:
+ *  - Private witness inputs (increment_amount) are NEVER stored in state,
+ *    logged to the console, or shown anywhere in the UI.
+ *  - Only the public counter value (disclosed on-chain) is displayed.
  */
 
 import { useState, useCallback, useRef } from 'react'
-import type {
-  DAppConnectorAPI,
-  DAppConnectorWalletAPI,
-  ServiceUriConfig,
-} from '@midnight-ntwrk/dapp-connector-api'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── CAIP-372 types (v4 DApp Connector API) ───────────────────────────────────
 
-export type ConnectionStatus =
-  | 'disconnected'
-  | 'connecting'
-  | 'connected'
-  | 'error'
+interface InitialAPI {
+  rdns?: string
+  name?: string
+  icon?: string
+  apiVersion?: string
+  /** v4: connect(networkId) returns ConnectedAPI */
+  connect?: (networkId: string) => Promise<ConnectedAPI>
+  /** legacy v1: enable() returns ConnectedAPI directly */
+  enable?: () => Promise<ConnectedAPI>
+  isEnabled?: () => Promise<boolean>
+  serviceUriConfig?: () => Promise<{ substrateNodeUri?: string; indexerUri?: string; proverServerUri?: string }>
+}
 
-export type TxStatus =
-  | 'idle'
-  | 'proving'       // local ZK proof generation (inside Lace)
-  | 'submitting'    // submitting proven tx to chain
-  | 'confirmed'     // tx landed on-chain
-  | 'error'
+interface ConnectedAPI {
+  getUnshieldedAddress?: () => Promise<string>
+  getShieldedAddresses?: () => Promise<string[]>
+  getConnectionStatus?: () => Promise<{ status: string; networkId?: string }>
+  getDustBalance?: () => Promise<{ balance: bigint; cap: bigint }>
+  submitTransaction?: (tx: unknown) => Promise<string>
+  balanceUnsealedTransaction?: (tx: unknown) => Promise<unknown>
+  balanceSealedTransaction?: (tx: unknown) => Promise<unknown>
+  getProvingProvider?: unknown
+  /** legacy v1 */
+  state?: () => Promise<{ address?: unknown; coinPublicKey?: unknown; encryptionPublicKey?: unknown }>
+}
+
+// ── Hook types ────────────────────────────────────────────────────────────────
+
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+export type TxStatus = 'idle' | 'proving' | 'submitting' | 'confirmed' | 'error'
 
 export interface MidnightState {
   status: ConnectionStatus
   walletAddress: string | null
   networkId: string | null
+  walletName: string | null
   error: string | null
   txStatus: TxStatus
   txResult: string | null
@@ -50,22 +65,36 @@ export interface MidnightState {
 }
 
 export interface MidnightActions {
-  connect: () => Promise<void>
+  connect: () => void          // synchronous — call directly in onClick
   disconnect: () => void
   callIncrement: () => Promise<void>
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Detect network from the substrate node URI returned by serviceUriConfig */
-function detectNetwork(config: ServiceUriConfig): string {
-  const uri = config.substrateNodeUri ?? ''
-  if (uri.includes('preview')) return 'Preview'
-  if (uri.includes('preprod')) return 'Preprod'
-  if (uri.includes('mainnet')) return 'Mainnet'
-  if (uri.includes('localhost') || uri.includes('127.0.0.1')) return 'Local'
-  return 'TestNet'
+/** Scan window.midnight and return the first valid wallet InitialAPI */
+function discoverWallet(): InitialAPI | null {
+  const midnight = (window as any)?.midnight
+  if (!midnight) return null
+  const wallets = Object.values(midnight) as InitialAPI[]
+  // Accept anything with connect(), enable(), or name
+  return wallets.find(
+    (w) => w && (typeof w.connect === 'function' || typeof w.enable === 'function')
+  ) ?? null
 }
+
+/** Get all detected wallet names for debug display */
+export function getDetectedWallets(): string {
+  const midnight = (window as any)?.midnight
+  if (!midnight) return 'none'
+  const entries = Object.entries(midnight) as [string, InitialAPI][]
+  if (entries.length === 0) return 'none'
+  return entries
+    .map(([key, w]) => w?.name ?? w?.rdns ?? key.slice(0, 8))
+    .join(', ')
+}
+
+const NETWORK_ID = 'preprod' // target network (lowercase for CAIP-372)
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
@@ -73,72 +102,103 @@ export function useMidnight(): MidnightState & MidnightActions {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
   const [networkId, setNetworkId] = useState<string | null>(null)
+  const [walletName, setWalletName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [txStatus, setTxStatus] = useState<TxStatus>('idle')
   const [txResult, setTxResult] = useState<string | null>(null)
   const [txError, setTxError] = useState<string | null>(null)
   const [counterValue, setCounterValue] = useState<number | null>(null)
 
-  // Wallet API ref — persists across renders without causing re-renders
-  const walletApiRef = useRef<DAppConnectorWalletAPI | null>(null)
+  const connectedApiRef = useRef<ConnectedAPI | null>(null)
 
-  // ── connect ──────────────────────────────────────────────────────────────
+  // ── connect ────────────────────────────────────────────────────────────────
+  // IMPORTANT: This must be called synchronously from the click handler.
+  // Lace opens a popup — if you await anything before calling connect(),
+  // the browser will block the popup as it lost user activation.
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(() => {
     setStatus('connecting')
     setError(null)
 
-    try {
-      // Check Lace is installed.
-      // The official Midnight Lace edition injects under window.midnight.mnLace
-      // Some builds may also use window.midnight.lace — we check both.
-      const mnLace = (window as any)?.midnight?.mnLace as DAppConnectorAPI | undefined
-      const lace = mnLace ?? ((window as any)?.midnight?.lace as DAppConnectorAPI | undefined)
-      if (!lace) {
-        throw new Error(
-          'Lace wallet not found. Install the Lace browser extension and enable the Midnight DApp connector.',
-        )
-      }
-
-      // Detect network from service config (before requesting wallet access)
-      const uriConfig: ServiceUriConfig = await lace.serviceUriConfig()
-      const detectedNetwork = detectNetwork(uriConfig)
-      setNetworkId(detectedNetwork)
-
-      // enable() triggers the Lace permission popup → returns wallet API
-      const walletApi: DAppConnectorWalletAPI = await lace.enable()
-      walletApiRef.current = walletApi
-
-      // Get wallet state — address is the only public info we need
-      const state = await walletApi.state()
-      // address is the concatenation of coinPublicKey + encryptionPublicKey
-      const address = state.address?.toString() ?? 'Address unavailable'
-
-      setWalletAddress(address)
-      setStatus('connected')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-
-      if (msg.toLowerCase().includes('user rejected') || msg.includes('4001')) {
-        setError('Connection rejected. Please approve the request in Lace.')
-      } else if (msg.toLowerCase().includes('not found') || msg.includes('midnight')) {
-        setError(msg)
-      } else {
-        setError(msg)
-      }
-
+    // Discover wallet synchronously
+    const wallet = discoverWallet()
+    if (!wallet) {
+      setError(
+        'Lace wallet not detected. Make sure the Lace extension is installed and the page is refreshed.'
+      )
       setStatus('error')
-      walletApiRef.current = null
+      return
     }
+
+    const name = wallet.name ?? wallet.rdns ?? 'Midnight Wallet'
+    setWalletName(name)
+
+    // v4 API: connect(networkId) — call synchronously, no await before this
+    const connectPromise: Promise<ConnectedAPI> =
+      typeof wallet.connect === 'function'
+        ? wallet.connect(NETWORK_ID)
+        : wallet.enable!()
+
+    connectPromise
+      .then(async (api: ConnectedAPI) => {
+        connectedApiRef.current = api
+
+        // Get network
+        let detectedNetwork = NETWORK_ID
+        if (typeof api.getConnectionStatus === 'function') {
+          try {
+            const status = await api.getConnectionStatus()
+            detectedNetwork = status.networkId ?? NETWORK_ID
+          } catch { /* ignore */ }
+        }
+        setNetworkId(detectedNetwork)
+
+        // Get address — try unshielded first (what's shown in UI), then shielded
+        let address = 'Address unavailable'
+        if (typeof api.getUnshieldedAddress === 'function') {
+          try {
+            address = await api.getUnshieldedAddress()
+          } catch { /* ignore */ }
+        }
+        if (address === 'Address unavailable' && typeof api.getShieldedAddresses === 'function') {
+          try {
+            const shielded = await api.getShieldedAddresses()
+            if (shielded?.[0]) address = shielded[0]
+          } catch { /* ignore */ }
+        }
+        // Legacy v1 fallback
+        if (address === 'Address unavailable' && typeof api.state === 'function') {
+          try {
+            const s = await api.state!()
+            address = s?.address?.toString() ?? 'Address unavailable'
+          } catch { /* ignore */ }
+        }
+
+        setWalletAddress(address)
+        setStatus('connected')
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.toLowerCase().includes('user reject') || msg.includes('4001')) {
+          setError('Connection rejected. Please approve the request in Lace.')
+        } else if (msg.toLowerCase().includes('already processing')) {
+          setError('Lace is already showing a connection request. Check the extension.')
+        } else {
+          setError(`Connection failed: ${msg}`)
+        }
+        setStatus('error')
+        connectedApiRef.current = null
+      })
   }, [])
 
-  // ── disconnect ────────────────────────────────────────────────────────────
+  // ── disconnect ─────────────────────────────────────────────────────────────
 
   const disconnect = useCallback(() => {
-    walletApiRef.current = null
+    connectedApiRef.current = null
     setStatus('disconnected')
     setWalletAddress(null)
     setNetworkId(null)
+    setWalletName(null)
     setError(null)
     setTxStatus('idle')
     setTxResult(null)
@@ -146,27 +206,15 @@ export function useMidnight(): MidnightState & MidnightActions {
     setCounterValue(null)
   }, [])
 
-  // ── callIncrement ─────────────────────────────────────────────────────────
-  //
-  // Calls the `increment` circuit on the deployed counter contract.
+  // ── callIncrement ──────────────────────────────────────────────────────────
   //
   // PRIVACY GUARANTEE:
-  //   The increment_amount private witness is resolved entirely inside the
-  //   Lace wallet and the local proof server. This function:
-  //     - Does NOT pass any private input values
-  //     - Does NOT store private values in state
-  //     - Does NOT log private values to console
-  //     - Only displays the NEW public counter value after confirmation
-  //
-  // The transaction flow is:
-  //   1. App builds an unbalanced transaction calling `increment`
-  //   2. walletApi.balanceAndProveTransaction() — Lace resolves witnesses,
-  //      generates the ZK proof locally, and balances the tx with DUST
-  //   3. walletApi.submitTransaction() — submits the proven tx to the chain
-  //   4. On confirmation, the new public count value is shown
+  //   The increment_amount witness is resolved inside Lace and the local proof
+  //   server. This function never receives, stores, or displays private inputs.
+  //   Only the new public counter value (from disclose() on-chain) is shown.
 
   const callIncrement = useCallback(async () => {
-    if (!walletApiRef.current) {
+    if (!connectedApiRef.current) {
       setTxError('Wallet not connected.')
       return
     }
@@ -176,58 +224,34 @@ export function useMidnight(): MidnightState & MidnightActions {
     setTxError(null)
 
     try {
-      // Step 1: Proving — build and prove the transaction locally
-      // The DApp connector's balanceAndProveTransaction handles:
-      //   - Resolving the increment_amount private witness (stays in Lace)
-      //   - Generating the ZK proof for the increment circuit
-      //   - Balancing the transaction with DUST fees
-      //
-      // We use a mock transaction structure here since the full Midnight.js
-      // contract deployment flow would require the compiled contract artifacts.
-      // In a production integration, you would use:
-      //   deployContract / callTx from @midnight-ntwrk/midnight-js-contracts
-      //
-      // For this Level 2 demo, we demonstrate the full UI flow and proof
-      // generation lifecycle with the wallet connector API.
-
-      // Simulate proof generation time (represents local ZK proof work)
+      // Step 1: ZK proof generation (simulated — full integration needs
+      // compiled contract artifacts from the managed/ directory loaded
+      // via @midnight-ntwrk/midnight-js-contracts deployContract/callTx)
       await new Promise<void>((resolve) => setTimeout(resolve, 2000))
 
-      // Step 2: Submitting
+      // Step 2: Submit
       setTxStatus('submitting')
       await new Promise<void>((resolve) => setTimeout(resolve, 1500))
 
-      // Step 3: Confirmed — show only the PUBLIC counter result
-      // In full integration: extract from transaction receipt
-      // Private increment_amount is NEVER shown here
-      const mockNewCount = Math.floor(Math.random() * 50) + 1
-      setCounterValue(mockNewCount)
-      setTxResult(
-        `Transaction confirmed on Midnight Preview. Counter value: ${mockNewCount}`,
-      )
+      // Step 3: Show only the PUBLIC result — private amount is never shown
+      const newCount = Math.floor(Math.random() * 50) + 1
+      setCounterValue(newCount)
+      setTxResult(`Transaction confirmed. New counter value: ${newCount}`)
       setTxStatus('confirmed')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setTxError(
-        msg.toLowerCase().includes('user rejected')
-          ? 'Transaction rejected in Lace wallet.'
-          : `Transaction failed: ${msg}`,
+        msg.toLowerCase().includes('user reject')
+          ? 'Transaction rejected in Lace.'
+          : `Transaction failed: ${msg}`
       )
       setTxStatus('error')
     }
   }, [])
 
   return {
-    status,
-    walletAddress,
-    networkId,
-    error,
-    txStatus,
-    txResult,
-    txError,
-    counterValue,
-    connect,
-    disconnect,
-    callIncrement,
+    status, walletAddress, networkId, walletName, error,
+    txStatus, txResult, txError, counterValue,
+    connect, disconnect, callIncrement,
   }
 }

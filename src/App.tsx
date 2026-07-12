@@ -71,6 +71,7 @@ export default function App() {
             <WalletConnect
               status={midnight.status}
               walletAddress={midnight.walletAddress}
+              walletName={midnight.walletName}
               networkId={midnight.networkId}
               error={midnight.error}
               onConnect={midnight.connect}

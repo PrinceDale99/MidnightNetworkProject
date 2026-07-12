@@ -1,37 +1,36 @@
 /**
  * WalletConnect.tsx
  *
- * Wallet connect / disconnect UI component for ZK-Whistleblower.
+ * Wallet connect / disconnect UI for ZK-Whistleblower.
  *
- * Shows:
- *  - Connect button → triggers Lace wallet connection
- *  - Connected state with wallet address (truncated for readability)
- *  - Disconnect button
- *  - Error states: not installed, user rejected, wrong network
- *  - Network badge (must be Midnight TestNet)
+ * IMPORTANT: onConnect must be called synchronously in onClick.
+ * Lace opens a real browser popup — if you await anything first,
+ * the browser blocks it due to lost user activation.
  */
 
 import React from 'react'
+import { getDetectedWallets } from '../hooks/useMidnight'
 import type { ConnectionStatus } from '../hooks/useMidnight'
 
 interface WalletConnectProps {
   status: ConnectionStatus
   walletAddress: string | null
+  walletName: string | null
   networkId: string | null
   error: string | null
-  onConnect: () => void
+  onConnect: () => void       // synchronous — called directly in onClick
   onDisconnect: () => void
 }
 
-/** Truncates a long address for display: mn_addr_pre...abc123 */
 function truncateAddress(addr: string): string {
   if (addr.length <= 20) return addr
-  return `${addr.slice(0, 14)}...${addr.slice(-6)}`
+  return `${addr.slice(0, 16)}...${addr.slice(-6)}`
 }
 
 export function WalletConnect({
   status,
   walletAddress,
+  walletName,
   networkId,
   error,
   onConnect,
@@ -40,109 +39,89 @@ export function WalletConnect({
   const isConnected = status === 'connected'
   const isConnecting = status === 'connecting'
   const isError = status === 'error'
-
-  // Debug: log what Midnight keys are available on window
-  const debugKeys = typeof window !== 'undefined'
-    ? Object.keys((window as any)?.midnight ?? {}).join(', ') || 'none'
-    : 'n/a'
+  const detectedWallets = getDetectedWallets()
 
   return (
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
-        <div style={styles.indicator(isConnected)} aria-label={isConnected ? 'Connected' : 'Disconnected'} />
+        <div style={styles.indicator(isConnected)} />
         <span style={styles.label}>
-          {isConnected ? 'Wallet Connected' : 'Wallet'}
+          {isConnected ? (walletName ?? 'Wallet') : 'Wallet'}
         </span>
         {isConnected && networkId && (
           <span style={styles.networkBadge}>{networkId}</span>
         )}
       </div>
 
-      {/* Connected state */}
+      {/* Address */}
       {isConnected && walletAddress && (
         <div style={styles.addressRow}>
           <span style={styles.addressLabel}>Address</span>
-          <code
-            style={styles.address}
-            title={walletAddress}
-            aria-label={`Wallet address: ${walletAddress}`}
-          >
+          <code style={styles.address} title={walletAddress}>
             {truncateAddress(walletAddress)}
           </code>
         </div>
       )}
 
-      {/* Error message */}
+      {/* Error */}
       {isError && error && (
-        <div style={styles.errorBox} role="alert" aria-live="polite">
+        <div style={styles.errorBox} role="alert">
           <span style={styles.errorIcon}>⚠</span>
-          <span style={styles.errorText}>{error}</span>
-          {error.includes('lace.io') && (
-            <a
-              href="https://www.lace.io/"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={styles.errorLink}
-            >
-              Install Lace →
-            </a>
-          )}
+          <div>
+            <span style={styles.errorText}>{error}</span>
+            {error.includes('not detected') && (
+              <a
+                href="https://www.lace.io/"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={styles.errorLink}
+              >
+                {' '}Install Lace →
+              </a>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Action button */}
+      {/* Connect / Disconnect button */}
       {isConnected ? (
-        <button
-          style={styles.disconnectBtn}
-          onClick={onDisconnect}
-          aria-label="Disconnect wallet"
-        >
+        <button style={styles.disconnectBtn} onClick={onDisconnect}>
           Disconnect
         </button>
       ) : (
         <button
           style={styles.connectBtn(isConnecting)}
-          onClick={onConnect}
+          onClick={onConnect}   // synchronous — no async wrapper
           disabled={isConnecting}
-          aria-label={isConnecting ? 'Connecting to wallet...' : 'Connect Lace wallet'}
           aria-busy={isConnecting}
         >
           {isConnecting ? (
-            <>
-              <span style={styles.spinner} aria-hidden="true" /> Connecting…
-            </>
+            <><span style={styles.spinner} />Connecting…</>
           ) : (
-            <>
-              <span style={styles.laceIcon} aria-hidden="true">⬡</span>
-              Connect Lace Wallet
-            </>
+            <><span>⬡</span> Connect Lace Wallet</>
           )}
         </button>
       )}
 
-      {/* Not installed hint */}
-      {!isConnected && !isConnecting && status === 'disconnected' && (
+      {/* Hint */}
+      {!isConnected && status === 'disconnected' && (
         <p style={styles.hint}>
           Requires{' '}
           <a href="https://www.lace.io/" target="_blank" rel="noopener noreferrer">
-            Lace wallet
+            Lace
           </a>{' '}
           with Midnight DApp connector enabled
         </p>
       )}
 
-      {/* Debug info — shows what's available on window.midnight */}
-      {!isConnected && (
-        <p style={styles.debugHint} aria-label="Debug: detected wallet keys">
-          window.midnight keys: <code>{debugKeys}</code>
-        </p>
-      )}
+      {/* Debug: show what's detected on window.midnight */}
+      <p style={styles.debugHint}>
+        Detected: <code>{detectedWallets}</code>
+      </p>
     </div>
   )
 }
-
-// ── Inline styles ─────────────────────────────────────────────────────────────
 
 const styles = {
   container: {
@@ -153,7 +132,6 @@ const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
     gap: '12px',
-    minWidth: '280px',
   },
   header: {
     display: 'flex',
@@ -170,7 +148,7 @@ const styles = {
   }),
   label: {
     fontSize: '13px',
-    fontWeight: 600,
+    fontWeight: 600 as const,
     color: '#8892a4',
     textTransform: 'uppercase' as const,
     letterSpacing: '0.05em',
@@ -178,10 +156,10 @@ const styles = {
   },
   networkBadge: {
     fontSize: '11px',
-    fontWeight: 600,
+    fontWeight: 600 as const,
     color: '#4f9eff',
-    background: 'rgba(79, 158, 255, 0.1)',
-    border: '1px solid rgba(79, 158, 255, 0.2)',
+    background: 'rgba(79,158,255,0.1)',
+    border: '1px solid rgba(79,158,255,0.2)',
     borderRadius: '4px',
     padding: '2px 6px',
     textTransform: 'uppercase' as const,
@@ -199,41 +177,29 @@ const styles = {
   addressLabel: {
     fontSize: '12px',
     color: '#4a5568',
-    fontWeight: 500,
+    fontWeight: 500 as const,
     flexShrink: 0,
   },
   address: {
     fontSize: '13px',
     color: '#00ff88',
-    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    fontFamily: "'JetBrains Mono','Fira Code',monospace",
     flex: 1,
     textAlign: 'right' as const,
     wordBreak: 'break-all' as const,
   },
   errorBox: {
-    background: 'rgba(255, 79, 79, 0.08)',
-    border: '1px solid rgba(255, 79, 79, 0.25)',
+    background: 'rgba(255,79,79,0.08)',
+    border: '1px solid rgba(255,79,79,0.25)',
     borderRadius: '8px',
     padding: '10px 14px',
     display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '6px',
+    gap: '8px',
+    alignItems: 'flex-start',
   },
-  errorIcon: {
-    fontSize: '14px',
-    color: '#ff4f4f',
-  },
-  errorText: {
-    fontSize: '13px',
-    color: '#ff9999',
-    lineHeight: 1.4,
-  },
-  errorLink: {
-    fontSize: '12px',
-    color: '#4f9eff',
-    textDecoration: 'none',
-    fontWeight: 600,
-  },
+  errorIcon: { fontSize: '14px', color: '#ff4f4f', flexShrink: 0 },
+  errorText: { fontSize: '13px', color: '#ff9999', lineHeight: 1.4 },
+  errorLink: { fontSize: '12px', color: '#4f9eff', fontWeight: 600 as const },
   connectBtn: (loading: boolean) => ({
     display: 'flex',
     alignItems: 'center',
@@ -242,16 +208,14 @@ const styles = {
     width: '100%',
     padding: '12px 20px',
     background: loading
-      ? 'rgba(0, 255, 136, 0.08)'
-      : 'linear-gradient(135deg, #00ff88 0%, #00cc6a 100%)',
+      ? 'rgba(0,255,136,0.08)'
+      : 'linear-gradient(135deg,#00ff88 0%,#00cc6a 100%)',
     color: loading ? '#00ff88' : '#0a0c10',
-    border: loading ? '1px solid rgba(0, 255, 136, 0.3)' : 'none',
+    border: loading ? '1px solid rgba(0,255,136,0.3)' : 'none',
     borderRadius: '8px',
     fontSize: '14px',
-    fontWeight: 700,
+    fontWeight: 700 as const,
     cursor: loading ? 'not-allowed' : 'pointer',
-    opacity: loading ? 0.7 : 1,
-    transition: 'all 0.2s ease',
   }),
   disconnectBtn: {
     width: '100%',
@@ -261,18 +225,14 @@ const styles = {
     border: '1px solid #1e2330',
     borderRadius: '8px',
     fontSize: '13px',
-    fontWeight: 600,
+    fontWeight: 600 as const,
     cursor: 'pointer',
-    transition: 'all 0.2s ease',
-  },
-  laceIcon: {
-    fontSize: '16px',
   },
   spinner: {
     display: 'inline-block',
     width: '14px',
     height: '14px',
-    border: '2px solid rgba(0, 255, 136, 0.3)',
+    border: '2px solid rgba(0,255,136,0.3)',
     borderTopColor: '#00ff88',
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
@@ -287,7 +247,7 @@ const styles = {
     fontSize: '11px',
     color: '#4a5568',
     textAlign: 'center' as const,
-    fontFamily: "'JetBrains Mono', monospace",
+    fontFamily: "'JetBrains Mono',monospace",
     background: '#0d0f14',
     borderRadius: '4px',
     padding: '4px 8px',
